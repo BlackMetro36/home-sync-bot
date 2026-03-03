@@ -1,5 +1,11 @@
 import sqlite3
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from datetime import datetime
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -8,11 +14,11 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from datetime import datetime
 
 TOKEN = "8577304548:AAH-CsPzaK_7JoBKOjyQgkuLYLpMe0K4voA"
 
+
+# --- DATABASE ---
 conn = sqlite3.connect("data.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -34,12 +40,13 @@ CREATE TABLE IF NOT EXISTS items (
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT,
+    datetime TEXT,
     text TEXT
 )
 """)
 
 conn.commit()
+
 
 CATEGORIES = {
     "products": "🛒 Продукты",
@@ -47,10 +54,11 @@ CATEGORIES = {
     "chem": "🧴 Бытовая химия",
     "home": "🏠 Для дома",
     "wishes": "💭 Хотелки",
-    "travel": "✈️ Куда поехать"
+    "travel": "✈️ Куда поехать",
 }
 
 
+# --- ACCESS (первые 2 пользователя) ---
 def register_user(user_id):
     cursor.execute("SELECT COUNT(*) FROM users")
     count = cursor.fetchone()[0]
@@ -69,14 +77,15 @@ def register_user(user_id):
     return False
 
 
+# --- MAIN MENU ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if not register_user(user_id):
-        await update.message.reply_text("Доступ закрыт.")
+        await update.message.reply_text("⛔ Доступ закрыт")
         return
 
-    keyboard = [[InlineKeyboardButton("📅 Дела по датам", callback_data="tasks")]]
+    keyboard = [[InlineKeyboardButton("📅 Дела по дате", callback_data="tasks")]]
 
     for key, value in CATEGORIES.items():
         keyboard.append([InlineKeyboardButton(value, callback_data=key)])
@@ -87,6 +96,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# --- SHOW CATEGORY ---
 async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -94,8 +104,10 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category = query.data
 
     if category == "tasks":
-        await query.edit_message_text("Введите дату и время:\n26.02.2026 18:30")
-        context.user_data["awaiting_date"] = True
+        await query.edit_message_text(
+            "Введите дату и время:\n26.02.2026 18:30"
+        )
+        context.user_data["awaiting_datetime"] = True
         return
 
     cursor.execute("SELECT id, name, status FROM items WHERE category=?", (category,))
@@ -107,9 +119,12 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for item in items:
         mark = "✅" if item[2] else "❌"
         text += f"{mark} {item[1]}\n"
-        keyboard.append(
-            [InlineKeyboardButton(item[1], callback_data=f"toggle_{item[0]}")]
-        )
+        keyboard.append([
+            InlineKeyboardButton(
+                item[1],
+                callback_data=f"toggle_{item[0]}_{category}"
+            )
+        ])
 
     keyboard.append([InlineKeyboardButton("➕ Добавить", callback_data=f"add_{category}")])
     keyboard.append([InlineKeyboardButton("⬅ Назад", callback_data="back")])
@@ -120,11 +135,14 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# --- TOGGLE ITEM ---
 async def toggle_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    item_id = int(query.data.split("_")[1])
+    _, item_id, category = query.data.split("_")
+    item_id = int(item_id)
+
     cursor.execute("SELECT status FROM items WHERE id=?", (item_id,))
     status = cursor.fetchone()[0]
     new_status = 0 if status else 1
@@ -132,56 +150,11 @@ async def toggle_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("UPDATE items SET status=? WHERE id=?", (new_status, item_id))
     conn.commit()
 
-    await query.edit_message_text("Обновлено ✅ Нажмите назад.")
+    # обновляем список
+    await show_category(update, context)
 
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("awaiting_date"):
-        context.user_data["task_datetime"] = update.message.text
-        context.user_data["awaiting_date"] = False
-        context.user_data["awaiting_task"] = True
-        await update.message.reply_text("Введите текст задачи:")
-        return
-
-    if context.user_data.get("awaiting_task"):
-        dt_str = context.user_data["task_datetime"]
-        text = update.message.text
-
-        cursor.execute("INSERT INTO tasks (date, text) VALUES (?, ?)", (dt_str, text))
-        conn.commit()
-
-        try:
-            dt = datetime.strptime(dt_str, "%d.%m.%Y %H:%M")
-            context.job_queue.run_once(remind, dt, data={"text": text})
-        except:
-            pass
-
-        context.user_data["awaiting_task"] = False
-        await update.message.reply_text("Задача добавлена 🔔")
-        return
-
-    if context.user_data.get("adding_category"):
-        category = context.user_data["adding_category"]
-        name = update.message.text
-
-        cursor.execute("INSERT INTO items (category, name) VALUES (?, ?)", (category, name))
-        conn.commit()
-
-        context.user_data["adding_category"] = None
-        await update.message.reply_text("Добавлено ✅")
-
-
-async def remind(context: ContextTypes.DEFAULT_TYPE):
-    cursor.execute("SELECT user_id FROM users")
-    users = cursor.fetchall()
-
-    for user in users:
-        await context.bot.send_message(
-            chat_id=user[0],
-            text="🔔 Напоминание: " + context.job.data["text"],
-        )
-
-
+# --- ADD ITEM BUTTON ---
 async def add_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -192,14 +165,75 @@ async def add_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("Введите название:")
 
 
+# --- TEXT HANDLER ---
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    # добавление задачи
+    if context.user_data.get("awaiting_datetime"):
+        context.user_data["task_datetime"] = update.message.text
+        context.user_data["awaiting_datetime"] = False
+        context.user_data["awaiting_task"] = True
+        await update.message.reply_text("Введите текст задачи:")
+        return
+
+    if context.user_data.get("awaiting_task"):
+        dt_str = context.user_data["task_datetime"]
+        text = update.message.text
+
+        cursor.execute(
+            "INSERT INTO tasks (datetime, text) VALUES (?, ?)",
+            (dt_str, text),
+        )
+        conn.commit()
+
+        try:
+            dt = datetime.strptime(dt_str, "%d.%m.%Y %H:%M")
+            context.job_queue.run_once(
+                send_reminder,
+                when=dt,
+                data=text,
+            )
+        except:
+            pass
+
+        context.user_data["awaiting_task"] = False
+        await update.message.reply_text("✅ Задача добавлена")
+        return
+
+    # добавление элемента
+    if context.user_data.get("adding_category"):
+        category = context.user_data["adding_category"]
+        name = update.message.text
+
+        cursor.execute(
+            "INSERT INTO items (category, name) VALUES (?, ?)",
+            (category, name),
+        )
+        conn.commit()
+
+        context.user_data["adding_category"] = None
+        await update.message.reply_text("✅ Добавлено")
+
+
+# --- REMINDER ---
+async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+
+    for user in users:
+        await context.bot.send_message(
+            chat_id=user[0],
+            text=f"🔔 Напоминание: {context.job.data}",
+        )
+
+
+# --- BACK ---
 async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 
+# --- APP START ---
 app = ApplicationBuilder().token(TOKEN).build()
-
-scheduler = AsyncIOScheduler()
-scheduler.start()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(show_category))
