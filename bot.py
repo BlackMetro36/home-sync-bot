@@ -15,10 +15,11 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = "8577304548:AAH-CsPzaK_7JoBKOjyQgkuLYLpMe0K4voA"
+TOKEN = "ВСТАВЬ_СЮДА_СВОЙ_ТОКЕН"
 
 
-# --- DATABASE ---
+# ---------------- DATABASE ----------------
+
 conn = sqlite3.connect("data.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -58,7 +59,8 @@ CATEGORIES = {
 }
 
 
-# --- ACCESS (первые 2 пользователя) ---
+# ---------------- ДОСТУП (первые 2 пользователя) ----------------
+
 def register_user(user_id):
     cursor.execute("SELECT COUNT(*) FROM users")
     count = cursor.fetchone()[0]
@@ -77,7 +79,8 @@ def register_user(user_id):
     return False
 
 
-# --- MAIN MENU ---
+# ---------------- ГЛАВНОЕ МЕНЮ ----------------
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -96,7 +99,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# --- SHOW CATEGORY ---
+# ---------------- ПОКАЗ КАТЕГОРИИ ----------------
+
 async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -105,7 +109,7 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if category == "tasks":
         await query.edit_message_text(
-            "Введите дату и время:\n26.02.2026 18:30"
+            "Введите дату и время:\nПример: 26.02.2026 18:30"
         )
         context.user_data["awaiting_datetime"] = True
         return
@@ -113,21 +117,27 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("SELECT id, name, status FROM items WHERE category=?", (category,))
     items = cursor.fetchall()
 
-    text = CATEGORIES[category] + ":\n\n"
+    text = CATEGORIES.get(category, "Список") + ":\n\n"
     keyboard = []
 
-    for item in items:
-        mark = "✅" if item[2] else "❌"
-        text += f"{mark} {item[1]}\n"
+    for item_id, name, status in items:
+        mark = "✅" if status else "❌"
+        text += f"{mark} {name}\n"
+
         keyboard.append([
             InlineKeyboardButton(
-                item[1],
-                callback_data=f"toggle_{item[0]}_{category}"
+                name,
+                callback_data=f"toggle_{item_id}_{category}"
             )
         ])
 
-    keyboard.append([InlineKeyboardButton("➕ Добавить", callback_data=f"add_{category}")])
-    keyboard.append([InlineKeyboardButton("⬅ Назад", callback_data="back")])
+    keyboard.append([
+        InlineKeyboardButton("➕ Добавить", callback_data=f"add_{category}")
+    ])
+
+    keyboard.append([
+        InlineKeyboardButton("⬅ Назад", callback_data="back")
+    ])
 
     await query.edit_message_text(
         text if items else "Список пуст.",
@@ -135,7 +145,8 @@ async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# --- TOGGLE ITEM ---
+# ---------------- ПЕРЕКЛЮЧЕНИЕ СТАТУСА ----------------
+
 async def toggle_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -150,11 +161,11 @@ async def toggle_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("UPDATE items SET status=? WHERE id=?", (new_status, item_id))
     conn.commit()
 
-    # обновляем список
     await show_category(update, context)
 
 
-# --- ADD ITEM BUTTON ---
+# ---------------- КНОПКА ДОБАВИТЬ ----------------
+
 async def add_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -165,10 +176,11 @@ async def add_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("Введите название:")
 
 
-# --- TEXT HANDLER ---
+# ---------------- ОБРАБОТКА ТЕКСТА ----------------
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    # добавление задачи
+    # Добавление даты
     if context.user_data.get("awaiting_datetime"):
         context.user_data["task_datetime"] = update.message.text
         context.user_data["awaiting_datetime"] = False
@@ -176,6 +188,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Введите текст задачи:")
         return
 
+    # Добавление задачи
     if context.user_data.get("awaiting_task"):
         dt_str = context.user_data["task_datetime"]
         text = update.message.text
@@ -200,7 +213,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Задача добавлена")
         return
 
-    # добавление элемента
+    # Добавление элемента
     if context.user_data.get("adding_category"):
         category = context.user_data["adding_category"]
         name = update.message.text
@@ -213,9 +226,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         context.user_data["adding_category"] = None
         await update.message.reply_text("✅ Добавлено")
+        return
 
 
-# --- REMINDER ---
+# ---------------- НАПОМИНАНИЕ ----------------
+
 async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("SELECT user_id FROM users")
     users = cursor.fetchall()
@@ -227,19 +242,28 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# --- BACK ---
+# ---------------- НАЗАД ----------------
+
 async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     await start(update, context)
 
 
-# --- APP START ---
+# ---------------- ЗАПУСК ----------------
+
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(show_category))
+
+# ВАЖНО: сначала конкретные
 app.add_handler(CallbackQueryHandler(toggle_item, pattern="^toggle_"))
 app.add_handler(CallbackQueryHandler(add_item, pattern="^add_"))
 app.add_handler(CallbackQueryHandler(back, pattern="^back$"))
+
+# потом общий
+app.add_handler(CallbackQueryHandler(show_category))
+
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
 app.run_polling()
