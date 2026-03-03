@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = "ВСТАВЬ_СЮДА_СВОЙ_ТОКЕН"
+TOKEN = "8577304548:AAH-CsPzaK_7JoBKOjyQgkuLYLpMe0K4voA"
 
 
 # ---------------- DATABASE ----------------
