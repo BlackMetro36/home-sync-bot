@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = "8577304548:AAH-CsPzaK_7JoBKOjyQgkuLYLpMe0K4voA"
+TOKEN = "8577304548:AAGmtneLEePzi99UF7746hndDrWtnQiCCJo"
 
 
 # ---------------- DATABASE ----------------
