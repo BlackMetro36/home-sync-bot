@@ -4,6 +4,7 @@ import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
+ALLOWED_USERS = [482418773,443835005]
 TOKEN = os.getenv("BOT_TOKEN")
 
 DATA_FILE = "data.json"
