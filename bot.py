@@ -1,9 +1,10 @@
 import json
+import os
 import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
-TOKEN = "8577304548:AAGmtneLEePzi99UF7746hndDrWtnQiCCJo"
+TOKEN = os.getenv("BOT_TOKEN")
 
 DATA_FILE = "data.json"
 
