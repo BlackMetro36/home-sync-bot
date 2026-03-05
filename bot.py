@@ -1,258 +1,128 @@
- import sqlite3
-from datetime import datetime
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 TOKEN = "8577304548:AAGmtneLEePzi99UF7746hndDrWtnQiCCJo"
 
+tasks = {}
+products = []
+meds = []
+chem = []
+wishlist = []
+places = []
 
-# ---------------- DATABASE ----------------
+user_state = {}
 
-conn = sqlite3.connect("data.db", check_same_thread=False)
-cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    datetime TEXT,
-    text TEXT
+main_menu = ReplyKeyboardMarkup(
+    [
+        ["📅 Добавить дело", "📋 Посмотреть дела"],
+        ["🛒 Продукты", "💊 Аптечка"],
+        ["🧴 Бытовая химия"],
+        ["⭐ Хотелки", "🌍 Куда поехать"],
+    ],
+    resize_keyboard=True,
 )
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    category TEXT,
-    name TEXT,
-    status INTEGER DEFAULT 0
-)
-""")
-
-conn.commit()
-
-
-CATEGORIES = {
-    "products": "🛒 Продукты",
-    "meds": "💊 Медикаменты",
-    "chem": "🧴 Бытовая химия",
-    "home": "🏠 Для дома",
-    "wishes": "💭 Хотелки",
-    "travel": "✈️ Куда поехать",
-}
-
-
-# ---------------- НАПОМИНАНИЕ ----------------
-
-async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    await context.bot.send_message(
-        chat_id=job.data["user_id"],
-        text=f"🔔 Напоминание:\n{job.data['text']}"
-    )
-
-
-def schedule_existing_tasks(app):
-    cursor.execute("SELECT id, user_id, datetime, text FROM tasks")
-    tasks = cursor.fetchall()
-
-    for task_id, user_id, dt_str, text in tasks:
-        try:
-            dt = datetime.strptime(dt_str, "%d.%m.%Y %H:%M")
-            if dt > datetime.now():
-                app.job_queue.run_once(
-                    send_reminder,
-                    when=dt,
-                    data={"user_id": user_id, "text": text}
-                )
-        except:
-            pass
-
-
-# ---------------- ГЛАВНОЕ МЕНЮ ----------------
-
-async def main_menu(update, context):
-    keyboard = [
-        [InlineKeyboardButton("📅 Дела по дате", callback_data="show_by_date")],
-        [InlineKeyboardButton("📆 Дела на месяц", callback_data="show_month")],
-        [InlineKeyboardButton("➕ Добавить задачу", callback_data="add_task")]
-    ]
-
-    for key, value in CATEGORIES.items():
-        keyboard.append([InlineKeyboardButton(value, callback_data=key)])
-
-    text = "🏠 Home Sync 5.0"
-
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        await update.message.reply_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await main_menu(update, context)
+    await update.message.reply_text("🏠 HomeBot готов!", reply_markup=main_menu)
 
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-# ---------------- ДОБАВЛЕНИЕ ЗАДАЧИ ----------------
-
-async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    context.user_data["add_task_date"] = True
-    await update.callback_query.edit_message_text(
-        "Введите дату и время:\n03.03.2026 18:30"
-    )
-
-
-# ---------------- ОБРАБОТКА ТЕКСТА ----------------
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    user_id = update.effective_user.id
+    user_id = update.message.from_user.id
 
-    # 1. Добавление задачи — ввод даты
-    if context.user_data.get("add_task_date"):
-        try:
-            datetime.strptime(text, "%d.%m.%Y %H:%M")
-            context.user_data["task_dt"] = text
-            context.user_data["add_task_date"] = False
-            context.user_data["add_task_text"] = True
-            await update.message.reply_text("Введите текст задачи:")
-        except:
-            await update.message.reply_text("Неверный формат.")
+    if text == "📅 Добавить дело":
+        user_state[user_id] = "add_date"
+        await update.message.reply_text("Введи дату (например 12.03)")
         return
 
-    # 2. Добавление задачи — ввод текста
-    if context.user_data.get("add_task_text"):
-        dt_str = context.user_data["task_dt"]
-
-        cursor.execute(
-            "INSERT INTO tasks (user_id, datetime, text) VALUES (?, ?, ?)",
-            (user_id, dt_str, text)
-        )
-        conn.commit()
-
-        dt = datetime.strptime(dt_str, "%d.%m.%Y %H:%M")
-        if dt > datetime.now():
-            context.job_queue.run_once(
-                send_reminder,
-                when=dt,
-                data={"user_id": user_id, "text": text}
-            )
-
-        context.user_data.clear()
-        await update.message.reply_text("✅ Задача добавлена")
-        await main_menu(update, context)
+    if user_state.get(user_id) == "add_date":
+        user_state[user_id] = ("add_task", text)
+        await update.message.reply_text("Теперь напиши дело")
         return
 
-    # 3. Показ задач по дате
-    if context.user_data.get("await_date"):
-        cursor.execute(
-            "SELECT datetime, text FROM tasks WHERE user_id=? AND datetime LIKE ?",
-            (user_id, f"{text}%")
-        )
-        tasks = cursor.fetchall()
-
-        if not tasks:
-            await update.message.reply_text("Нет задач.")
-        else:
-            message = f"📅 Дела на {text}:\n\n"
-            for dt, task in tasks:
-                time = dt.split(" ")[1]
-                message += f"🕒 {time} — {task}\n"
-            await update.message.reply_text(message)
-
-        context.user_data.clear()
-        await main_menu(update, context)
-        return
-
-    # 4. Показ задач на месяц
-    if context.user_data.get("await_month"):
-        try:
-            datetime.strptime(text, "%m.%Y")
-        except:
-            await update.message.reply_text("Формат: 03.2026")
+    if isinstance(user_state.get(user_id), tuple):
+        state, date = user_state[user_id]
+        if state == "add_task":
+            tasks.setdefault(date, []).append(text)
+            user_state[user_id] = None
+            await update.message.reply_text("✅ Дело добавлено", reply_markup=main_menu)
             return
 
-        cursor.execute(
-            "SELECT datetime, text FROM tasks WHERE user_id=? AND datetime LIKE ?",
-            (user_id, f"%.{text}%")
-        )
-        tasks = cursor.fetchall()
+    if text == "📋 Посмотреть дела":
+        user_state[user_id] = "show_date"
+        await update.message.reply_text("Введи дату")
+        return
 
-        if not tasks:
-            await update.message.reply_text("Нет задач.")
+    if user_state.get(user_id) == "show_date":
+        date = text
+        user_state[user_id] = None
+
+        if date in tasks:
+            result = "\n".join(tasks[date])
+            await update.message.reply_text(f"📅 {date}\n\n{result}", reply_markup=main_menu)
         else:
-            message = f"📆 Дела за {text}:\n\n"
-            for dt, task in tasks:
-                message += f"{dt} — {task}\n"
-            await update.message.reply_text(message)
+            await update.message.reply_text("Дел нет", reply_markup=main_menu)
+        return
 
-        context.user_data.clear()
-        await main_menu(update, context)
+    if text == "🛒 Продукты":
+        user_state[user_id] = "add_product"
+        await update.message.reply_text("Напиши продукт")
+        return
 
+    if user_state.get(user_id) == "add_product":
+        products.append(text)
+        user_state[user_id] = None
+        await update.message.reply_text("✅ Добавлено", reply_markup=main_menu)
+        return
 
-# ---------------- CALLBACK ROUTER ----------------
+    if text == "💊 Аптечка":
+        user_state[user_id] = "add_med"
+        await update.message.reply_text("Напиши лекарство")
+        return
 
-async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    if user_state.get(user_id) == "add_med":
+        meds.append(text)
+        user_state[user_id] = None
+        await update.message.reply_text("✅ Добавлено", reply_markup=main_menu)
+        return
 
-    data = query.data
+    if text == "🧴 Бытовая химия":
+        user_state[user_id] = "add_chem"
+        await update.message.reply_text("Напиши средство")
+        return
 
-    if data == "add_task":
-        await add_task(update, context)
+    if user_state.get(user_id) == "add_chem":
+        chem.append(text)
+        user_state[user_id] = None
+        await update.message.reply_text("✅ Добавлено", reply_markup=main_menu)
+        return
 
-    elif data == "show_by_date":
-        context.user_data["await_date"] = True
-        await query.edit_message_text("Введите дату:\n03.03.2026")
+    if text == "⭐ Хотелки":
+        user_state[user_id] = "add_wish"
+        await update.message.reply_text("Что хотите купить?")
+        return
 
-    elif data == "show_month":
-        context.user_data["await_month"] = True
-        await query.edit_message_text("Введите месяц:\n03.2026")
+    if user_state.get(user_id) == "add_wish":
+        wishlist.append(text)
+        user_state[user_id] = None
+        await update.message.reply_text("⭐ Добавлено", reply_markup=main_menu)
+        return
 
-    elif data in CATEGORIES:
-        category = data
-        user_id = query.from_user.id
+    if text == "🌍 Куда поехать":
+        user_state[user_id] = "add_place"
+        await update.message.reply_text("Куда хотите поехать?")
+        return
 
-        cursor.execute(
-            "SELECT id, name, status FROM items WHERE user_id=? AND category=?",
-            (user_id, category)
-        )
-        items = cursor.fetchall()
+    if user_state.get(user_id) == "add_place":
+        places.append(text)
+        user_state[user_id] = None
+        await update.message.reply_text("🌍 Добавлено", reply_markup=main_menu)
+        return
 
-        text = CATEGORIES[category] + ":\n\n"
-        for _, name, status in items:
-            mark = "✅" if status else "❌"
-            text += f"{mark} {name}\n"
-
-        await query.edit_message_text(text if items else "Список пуст.")
-    else:
-        await main_menu(update, context)
-
-
-# ---------------- ЗАПУСК ----------------
 
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(router))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-schedule_existing_tasks(app)
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
 app.run_polling()
