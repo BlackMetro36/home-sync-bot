@@ -1,282 +1,303 @@
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import json
 import os
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton
-)
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters
-)
+from datetime import datetime, timedelta
 
 TOKEN = "8577304548:AAGmtneLEePzi99UF7746hndDrWtnQiCCJo"
 
 DATA_FILE = "data.json"
 
-MENU = [
-    ["📅 Дела"],
-    ["➕ Добавить дело"],
-    ["🛒 Продукты", "💊 Медикаменты"],
-    ["🧴 Бытовая химия", "🏠 Полезности"],
-    ["⭐ Хотелки", "✈️ Поездки"]
-]
-
-lists_map = {
-    "🛒 Продукты": "products",
-    "💊 Медикаменты": "meds",
-    "🧴 Бытовая химия": "chem",
-    "🏠 Полезности": "home",
-    "⭐ Хотелки": "wishes",
-    "✈️ Поездки": "places"
-}
+# создание базы если нет
+if not os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "w") as f:
+        json.dump({
+            "tasks": {},
+            "lists": {
+                "products": [],
+                "meds": [],
+                "chem": [],
+                "useful": [],
+                "wishlist": [],
+                "trips": []
+            }
+        }, f)
 
 
 def load_data():
-
-    if not os.path.exists(DATA_FILE):
-
-        data = {
-            "tasks": {},
-            "products": {},
-            "meds": {},
-            "chem": {},
-            "home": {},
-            "wishes": {},
-            "places": {}
-        }
-
-        with open(DATA_FILE, "w") as f:
-            json.dump(data, f)
-
-    with open(DATA_FILE) as f:
+    with open(DATA_FILE, "r") as f:
         return json.load(f)
 
 
 def save_data(data):
-
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
 
-def build_list_keyboard(items):
+# ------------------- МЕНЮ -------------------
 
-    keyboard = []
+def main_menu():
+    markup = InlineKeyboardMarkup()
 
-    for name, state in items.items():
+    markup.add(
+        InlineKeyboardButton("📅 Дела", callback_data="tasks"),
+        InlineKeyboardButton("🛒 Списки", callback_data="lists")
+    )
 
-        icon = "✅" if state else "⬜"
+    markup.add(
+        InlineKeyboardButton("➕ Добавить дело", callback_data="add_task")
+    )
 
-        keyboard.append([
-            InlineKeyboardButton(f"{icon} {name}", callback_data=f"toggle|{name}"),
-            InlineKeyboardButton("❌", callback_data=f"delete|{name}")
-        ])
-
-    keyboard.append([
-        InlineKeyboardButton("➕ Добавить", callback_data="add")
-    ])
-
-    return InlineKeyboardMarkup(keyboard)
+    return markup
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@bot.message_handler(commands=["start"])
+def start(msg):
+    bot.send_message(msg.chat.id, "Главное меню", reply_markup=main_menu())
 
-    keyboard = ReplyKeyboardMarkup(MENU, resize_keyboard=True)
 
-    await update.message.reply_text(
-        "🏠 Главное меню",
-        reply_markup=keyboard
+# ------------------- ДЕЛА -------------------
+
+@bot.callback_query_handler(func=lambda c: c.data == "tasks")
+def tasks_menu(call):
+
+    markup = InlineKeyboardMarkup()
+
+    markup.add(
+        InlineKeyboardButton("📅 Выбрать дату", callback_data="pick_date")
+    )
+
+    markup.add(
+        InlineKeyboardButton("📆 На неделю", callback_data="week_tasks")
+    )
+
+    markup.add(
+        InlineKeyboardButton("📋 Все дела", callback_data="all_tasks")
+    )
+
+    markup.add(
+        InlineKeyboardButton("🔙 Назад", callback_data="back")
+    )
+
+    bot.edit_message_text(
+        "📅 Дела",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
     )
 
 
-async def show_list(update, context, list_key, title):
+# ------------------- ДЕЛА НА НЕДЕЛЮ -------------------
+
+@bot.callback_query_handler(func=lambda c: c.data == "week_tasks")
+def week_tasks(call):
 
     data = load_data()
 
-    items = data[list_key]
+    today = datetime.today()
 
-    keyboard = build_list_keyboard(items)
+    text = "📆 Ближайшие 7 дней\n\n"
 
-    await update.message.reply_text(
-        title,
-        reply_markup=keyboard
+    for i in range(7):
+
+        d = today + timedelta(days=i)
+        key = d.strftime("%d.%m.%Y")
+
+        if key in data["tasks"]:
+
+            text += f"{key}\n"
+
+            for t in data["tasks"][key]:
+                text += f"• {t}\n"
+
+            text += "\n"
+
+    bot.send_message(call.message.chat.id, text)
+
+
+# ------------------- ВСЕ ДЕЛА -------------------
+
+@bot.callback_query_handler(func=lambda c: c.data == "all_tasks")
+def all_tasks(call):
+
+    data = load_data()
+
+    text = "📋 Все дела\n\n"
+
+    for date in sorted(data["tasks"]):
+
+        for t in data["tasks"][date]:
+
+            text += f"{date} — {t}\n"
+
+    bot.send_message(call.message.chat.id, text)
+
+
+# ------------------- СПИСКИ -------------------
+
+@bot.callback_query_handler(func=lambda c: c.data == "lists")
+def lists(call):
+
+    markup = InlineKeyboardMarkup()
+
+    markup.add(
+        InlineKeyboardButton("🛒 Продукты", callback_data="products"),
+        InlineKeyboardButton("💊 Медикаменты", callback_data="meds")
+    )
+
+    markup.add(
+        InlineKeyboardButton("🧴 Бытовая химия", callback_data="chem")
+    )
+
+    markup.add(
+        InlineKeyboardButton("🏠 Полезности", callback_data="useful")
+    )
+
+    markup.add(
+        InlineKeyboardButton("⭐ Хотелки", callback_data="wishlist")
+    )
+
+    markup.add(
+        InlineKeyboardButton("✈️ Поездки", callback_data="trips")
+    )
+
+    markup.add(
+        InlineKeyboardButton("🔙 Назад", callback_data="back")
+    )
+
+    bot.edit_message_text(
+        "🛒 Списки",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
     )
 
 
-async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ------------------- ПОКАЗ СПИСКА -------------------
 
-    text = update.message.text
-    data = load_data()
-
-
-    if text in lists_map:
-
-        key = lists_map[text]
-
-        context.user_data["current_list"] = key
-        context.user_data["list_title"] = text
-
-        await show_list(update, context, key, text)
-
-        return
-
-
-    if text == "➕ Добавить дело":
-
-        context.user_data["mode"] = "add_task"
-
-        await update.message.reply_text(
-            "Напиши:\n\n2026-03-10 Купить торт"
-        )
-
-        return
-
-
-    if context.user_data.get("mode") == "add_task":
-
-        try:
-
-            date, task = text.split(" ", 1)
-
-            if date not in data["tasks"]:
-                data["tasks"][date] = []
-
-            data["tasks"][date].append(task)
-
-            save_data(data)
-
-            context.user_data["mode"] = None
-
-            await update.message.reply_text("✅ Дело добавлено")
-
-            await start(update, context)
-
-        except:
-
-            await update.message.reply_text("Формат:\n2026-03-10 Купить торт")
-
-        return
-
-
-    if text == "📅 Дела":
-
-        context.user_data["mode"] = "show_tasks"
-
-        await update.message.reply_text(
-            "Введите дату\n\n2026-03-10"
-        )
-
-        return
-
-
-    if context.user_data.get("mode") == "show_tasks":
-
-        tasks = data["tasks"].get(text)
-
-        if not tasks:
-
-            await update.message.reply_text("Дел нет")
-
-        else:
-
-            msg = f"📅 {text}\n\n"
-
-            for t in tasks:
-                msg += f"• {t}\n"
-
-            await update.message.reply_text(msg)
-
-        context.user_data["mode"] = None
-
-        await start(update, context)
-
-        return
-
-
-    if context.user_data.get("mode") == "add_item":
-
-        key = context.user_data["current_list"]
-
-        data[key][text] = False
-
-        save_data(data)
-
-        context.user_data["mode"] = None
-
-        await show_list(
-            update,
-            context,
-            key,
-            context.user_data["list_title"]
-        )
-
-
-async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-
-    await query.answer()
+def show_list(chat_id, name):
 
     data = load_data()
 
-    key = context.user_data.get("current_list")
+    items = data["lists"][name]
 
-    action, name = None, None
+    markup = InlineKeyboardMarkup()
 
-    if "|" in query.data:
+    text = ""
 
-        action, name = query.data.split("|")
+    for i, item in enumerate(items):
 
-    else:
+        icon = "✅" if item["done"] else "⬜"
 
-        action = query.data
+        markup.add(
+            InlineKeyboardButton(
+                f"{icon} {item['name']}",
+                callback_data=f"toggle_{name}_{i}"
+            )
+        )
 
+        text += f"{icon} {item['name']}\n"
 
-    if action == "add":
+    markup.add(
+        InlineKeyboardButton("➕ Добавить", callback_data=f"add_{name}")
+    )
 
-        context.user_data["mode"] = "add_item"
+    markup.add(
+        InlineKeyboardButton("❌ Удалить", callback_data=f"del_{name}")
+    )
 
-        await query.message.reply_text("Введите название")
-
-        return
-
-
-    if action == "toggle":
-
-        data[key][name] = not data[key][name]
-
-        save_data(data)
-
-
-    if action == "delete":
-
-        del data[key][name]
-
-        save_data(data)
+    bot.send_message(chat_id, text or "Пусто", reply_markup=markup)
 
 
-    items = data[key]
+# ------------------- ОТКРЫТЬ СПИСОК -------------------
 
-    keyboard = build_list_keyboard(items)
+@bot.callback_query_handler(func=lambda c: c.data in ["products","meds","chem","useful","wishlist","trips"])
+def open_list(call):
 
-    await query.message.edit_reply_markup(reply_markup=keyboard)
+    show_list(call.message.chat.id, call.data)
 
 
-if __name__ == "__main__":
+# ------------------- ПЕРЕКЛЮЧЕНИЕ ГАЛОЧКИ -------------------
 
-    app = ApplicationBuilder().token(TOKEN).build()
+@bot.callback_query_handler(func=lambda c: c.data.startswith("toggle"))
+def toggle(call):
 
-    app.add_handler(CommandHandler("start", start))
+    _, name, i = call.data.split("_")
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
+    data = load_data()
 
-    app.add_handler(CallbackQueryHandler(callback))
+    item = data["lists"][name][int(i)]
 
-    print("бот запущен")
+    item["done"] = not item["done"]
 
-    app.run_polling()
+    save_data(data)
+
+    show_list(call.message.chat.id, name)
+
+
+# ------------------- ДОБАВИТЬ -------------------
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("add_"))
+def add_item(call):
+
+    name = call.data.split("_")[1]
+
+    msg = bot.send_message(call.message.chat.id, "Напиши название")
+
+    bot.register_next_step_handler(msg, save_item, name)
+
+
+def save_item(msg, name):
+
+    data = load_data()
+
+    data["lists"][name].append({
+        "name": msg.text,
+        "done": False
+    })
+
+    save_data(data)
+
+    show_list(msg.chat.id, name)
+
+
+# ------------------- УДАЛИТЬ -------------------
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("del_"))
+def delete_item(call):
+
+    name = call.data.split("_")[1]
+
+    msg = bot.send_message(call.message.chat.id, "Напиши номер элемента")
+
+    bot.register_next_step_handler(msg, remove_item, name)
+
+
+def remove_item(msg, name):
+
+    data = load_data()
+
+    i = int(msg.text) - 1
+
+    if i < len(data["lists"][name]):
+        data["lists"][name].pop(i)
+
+    save_data(data)
+
+    show_list(msg.chat.id, name)
+
+
+# ------------------- НАЗАД -------------------
+
+@bot.callback_query_handler(func=lambda c: c.data == "back")
+def back(call):
+
+    bot.edit_message_text(
+        "Главное меню",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=main_menu()
+    )
+
+
+bot.infinity_polling()
