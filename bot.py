@@ -1,127 +1,205 @@
-import json
 import os
+import json
 import datetime
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-DATA_FILE = "data.json"
+DATA_FILE="data.json"
 
-CATEGORIES = {
-    "products": "🛒 Продукты",
-    "meds": "💊 Медикаменты",
-    "chem": "🧴 Бытовая химия",
-    "useful": "🏠 Полезности",
-    "wishes": "⭐ Хотелки",
-    "trips": "✈️ Поездки"
+CATEGORIES={
+"products":"🛒 Продукты",
+"meds":"💊 Медикаменты",
+"chem":"🧴 Бытовая химия",
+"useful":"🏠 Полезности",
+"wishes":"⭐ Хотелки",
+"trips":"✈️ Поездки"
 }
 
 def load():
+
     with open(DATA_FILE) as f:
         return json.load(f)
 
 def save(data):
+
     with open(DATA_FILE,"w") as f:
-        json.dump(data,f)
+        json.dump(data,f,indent=2)
 
-data = load()
+data=load()
 
-def main_menu():
+def menu():
 
     return InlineKeyboardMarkup([
 
-        [InlineKeyboardButton("📅 Дела",callback_data="tasks")],
-        [InlineKeyboardButton("➕ Добавить дело",callback_data="add_task")],
+    [InlineKeyboardButton("📅 Дела",callback_data="tasks")],
 
-        [InlineKeyboardButton("🛒 Продукты",callback_data="products"),
-         InlineKeyboardButton("💊 Медикаменты",callback_data="meds")],
+    [InlineKeyboardButton("➕ Добавить дело",callback_data="add_task")],
 
-        [InlineKeyboardButton("🧴 Бытовая химия",callback_data="chem"),
-         InlineKeyboardButton("🏠 Полезности",callback_data="useful")],
+    [InlineKeyboardButton("🛒 Продукты",callback_data="products"),
+     InlineKeyboardButton("💊 Медикаменты",callback_data="meds")],
 
-        [InlineKeyboardButton("⭐ Хотелки",callback_data="wishes"),
-         InlineKeyboardButton("✈️ Поездки",callback_data="trips")]
+    [InlineKeyboardButton("🧴 Бытовая химия",callback_data="chem"),
+     InlineKeyboardButton("🏠 Полезности",callback_data="useful")],
+
+    [InlineKeyboardButton("⭐ Хотелки",callback_data="wishes"),
+     InlineKeyboardButton("✈️ Поездки",callback_data="trips")]
 
     ])
 
 async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
+    user_id=update.effective_chat.id
+
+    if user_id not in data["users"]:
+        data["users"].append(user_id)
+        save(data)
+
     await update.message.reply_text(
-        "🏠 Home Planner",
-        reply_markup=main_menu()
+    "🏠 Домашний планер",
+    reply_markup=menu()
     )
 
-async def menu(update:Update,context:ContextTypes.DEFAULT_TYPE):
+async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
-    query = update.callback_query
-    await query.answer()
+    q=update.callback_query
+    await q.answer()
 
-    cmd = query.data
+    cmd=q.data
 
     if cmd in CATEGORIES:
 
-        items = data[cmd]
+        items=data[cmd]
 
-        text = "\n".join(items) if items else "Список пуст"
+        text="\n".join([f"{i+1}. {v}" for i,v in enumerate(items)]) if items else "Список пуст"
 
-        keyboard = [
+        kb=[
 
-            [InlineKeyboardButton("➕ Добавить",callback_data=f"add_{cmd}")],
-            [InlineKeyboardButton("❌ Удалить",callback_data=f"remove_{cmd}")]
-
-        ]
-
-        await query.message.reply_text(text,reply_markup=InlineKeyboardMarkup(keyboard))
-
-    if cmd == "tasks":
-
-        keyboard=[
-
-            [InlineKeyboardButton("📆 На неделю",callback_data="week_tasks")],
-            [InlineKeyboardButton("📅 Все дела",callback_data="all_tasks")]
+        [InlineKeyboardButton("➕ Добавить",callback_data=f"add_{cmd}")],
+        [InlineKeyboardButton("❌ Удалить",callback_data=f"del_{cmd}")],
+        [InlineKeyboardButton("⬅️ Назад",callback_data="home")]
 
         ]
 
-        await query.message.reply_text(
-            "Выберите",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+        await q.message.reply_text(
+        f"{CATEGORIES[cmd]}\n\n{text}",
+        reply_markup=InlineKeyboardMarkup(kb)
         )
 
-async def add(update:Update,context:ContextTypes.DEFAULT_TYPE):
+    elif cmd=="home":
 
-    query = update.callback_query
-    await query.answer()
+        await q.message.reply_text("Меню",reply_markup=menu())
 
-    cmd=query.data.replace("add_","")
+    elif cmd=="tasks":
 
-    context.user_data["add"]=cmd
+        kb=[
 
-    if cmd=="task":
+        [InlineKeyboardButton("📆 Неделя",callback_data="week")],
+        [InlineKeyboardButton("📋 Все",callback_data="all_tasks")],
+        [InlineKeyboardButton("⬅️ Назад",callback_data="home")]
 
-        await query.message.reply_text("Введите дату YYYY-MM-DD")
+        ]
 
-        context.user_data["step"]="date"
+        await q.message.reply_text("Дела",reply_markup=InlineKeyboardMarkup(kb))
 
-    else:
+    elif cmd=="week":
 
-        await query.message.reply_text("Введите текст")
+        today=datetime.date.today()
+
+        txt=""
+
+        for i in range(7):
+
+            d=(today+datetime.timedelta(days=i)).isoformat()
+
+            if d in data["tasks"]:
+
+                for t in data["tasks"][d]:
+
+                    txt+=f"{d} — {t}\n"
+
+        if txt=="":
+
+            txt="Нет дел"
+
+        await q.message.reply_text(txt)
+
+    elif cmd=="all_tasks":
+
+        txt=""
+
+        for d in sorted(data["tasks"]):
+
+            for t in data["tasks"][d]:
+
+                txt+=f"{d} — {t}\n"
+
+        if txt=="":
+
+            txt="Нет дел"
+
+        await q.message.reply_text(txt)
+
+    elif cmd.startswith("add_"):
+
+        context.user_data["mode"]=cmd.replace("add_","")
+
+        if context.user_data["mode"]=="task":
+
+            context.user_data["step"]="date"
+
+            await q.message.reply_text("Введите дату YYYY-MM-DD")
+
+        else:
+
+            await q.message.reply_text("Введите текст")
+
+    elif cmd.startswith("del_"):
+
+        cat=cmd.replace("del_","")
+
+        items=data[cat]
+
+        if not items:
+
+            await q.message.reply_text("Список пуст")
+
+            return
+
+        kb=[]
+
+        for i,v in enumerate(items):
+
+            kb.append([InlineKeyboardButton(v,callback_data=f"remove_{cat}_{i}")])
+
+        await q.message.reply_text("Что удалить?",reply_markup=InlineKeyboardMarkup(kb))
+
+    elif cmd.startswith("remove_"):
+
+        _,cat,i=cmd.split("_")
+
+        data[cat].pop(int(i))
+
+        save(data)
+
+        await q.message.reply_text("Удалено")
 
 async def text(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
-    if "add" not in context.user_data:
+    if "mode" not in context.user_data:
         return
 
-    cmd=context.user_data["add"]
+    mode=context.user_data["mode"]
 
-    txt=update.message.text
+    msg=update.message.text
 
-    if cmd=="task":
+    if mode=="task":
 
         if context.user_data.get("step")=="date":
 
-            context.user_data["date"]=txt
+            context.user_data["date"]=msg
             context.user_data["step"]="task"
 
             await update.message.reply_text("Введите дело")
@@ -133,46 +211,23 @@ async def text(update:Update,context:ContextTypes.DEFAULT_TYPE):
         if date not in data["tasks"]:
             data["tasks"][date]=[]
 
-        data["tasks"][date].append(txt)
+        data["tasks"][date].append(msg)
 
         save(data)
 
         context.user_data.clear()
 
-        await update.message.reply_text("Дело добавлено",reply_markup=main_menu())
+        await update.message.reply_text("Дело добавлено",reply_markup=menu())
 
         return
 
-    data[cmd].append(txt)
+    data[mode].append(msg)
 
     save(data)
 
     context.user_data.clear()
 
-    await update.message.reply_text("Добавлено",reply_markup=main_menu())
-
-async def week(update:Update,context:ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-    await query.answer()
-
-    today=datetime.date.today()
-
-    out=""
-
-    for i in range(7):
-
-        d=(today+datetime.timedelta(days=i)).isoformat()
-
-        if d in data["tasks"]:
-
-            for t in data["tasks"][d]:
-                out+=f"{d} - {t}\n"
-
-    if not out:
-        out="Нет дел"
-
-    await query.message.reply_text(out)
+    await update.message.reply_text("Добавлено",reply_markup=menu())
 
 async def notify(context:ContextTypes.DEFAULT_TYPE):
 
@@ -184,35 +239,27 @@ async def notify(context:ContextTypes.DEFAULT_TYPE):
     text="📅 Дела на сегодня:\n"
 
     for t in data["tasks"][today]:
+
         text+=f"- {t}\n"
 
-    for chat_id in context.application.chat_data:
+    for u in data["users"]:
 
-        await context.bot.send_message(chat_id,text)
+        await context.bot.send_message(u,text)
 
 def main():
 
     app=ApplicationBuilder().token(TOKEN).build()
 
-    scheduler=AsyncIOScheduler()
+    job_queue=app.job_queue
 
-    scheduler.add_job(
-        notify,
-        "cron",
-        hour=6,
-        minute=0,
-        args=[app]
+    job_queue.run_daily(
+    notify,
+    time=datetime.time(hour=6,minute=0)
     )
-
-    scheduler.start()
 
     app.add_handler(CommandHandler("start",start))
 
-    app.add_handler(CallbackQueryHandler(add,pattern="add_"))
-
-    app.add_handler(CallbackQueryHandler(week,pattern="week_tasks"))
-
-    app.add_handler(CallbackQueryHandler(menu))
+    app.add_handler(CallbackQueryHandler(buttons))
 
     app.add_handler(MessageHandler(filters.TEXT,text))
 
