@@ -1,128 +1,253 @@
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+import json
+import os
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
+)
 
 TOKEN = "8577304548:AAGmtneLEePzi99UF7746hndDrWtnQiCCJo"
 
-tasks = {}
-products = []
-meds = []
-chem = []
-wishlist = []
-places = []
+DATA_FILE = "data.json"
 
-user_state = {}
 
-main_menu = ReplyKeyboardMarkup(
-    [
-        ["📅 Добавить дело", "📋 Посмотреть дела"],
-        ["🛒 Продукты", "💊 Аптечка"],
-        ["🧴 Бытовая химия"],
-        ["⭐ Хотелки", "🌍 Куда поехать"],
-    ],
-    resize_keyboard=True,
-)
+MENU = [
+    ["📅 Дела"],
+    ["➕ Добавить дело"],
+    ["🛒 Продукты", "💊 Медикаменты"],
+    ["🧴 Бытовая химия", "🏠 Полезности"],
+    ["⭐ Хотелки", "✈️ Поездки"]
+]
+
+
+lists_map = {
+    "🛒 Продукты": "products",
+    "💊 Медикаменты": "meds",
+    "🧴 Бытовая химия": "chem",
+    "🏠 Полезности": "home",
+    "⭐ Хотелки": "wishes",
+    "✈️ Поездки": "places"
+}
+
+
+def load_data():
+
+    if not os.path.exists(DATA_FILE):
+
+        data = {
+            "tasks": {},
+            "products": {},
+            "meds": {},
+            "chem": {},
+            "home": {},
+            "wishes": {},
+            "places": {}
+        }
+
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f)
+
+    with open(DATA_FILE) as f:
+        return json.load(f)
+
+
+def save_data(data):
+
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏠 HomeBot готов!", reply_markup=main_menu)
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = ReplyKeyboardMarkup(MENU, resize_keyboard=True)
+
+    await update.message.reply_text(
+        "🏠 Главное меню",
+        reply_markup=keyboard
+    )
+
+
+async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
-    user_id = update.message.from_user.id
+    data = load_data()
 
-    if text == "📅 Добавить дело":
-        user_state[user_id] = "add_date"
-        await update.message.reply_text("Введи дату (например 12.03)")
+
+    if text == "➕ Добавить дело":
+
+        context.user_data["mode"] = "add_task"
+
+        await update.message.reply_text(
+            "Напиши:\n\n2026-03-10 Купить торт"
+        )
+
         return
 
-    if user_state.get(user_id) == "add_date":
-        user_state[user_id] = ("add_task", text)
-        await update.message.reply_text("Теперь напиши дело")
+
+    if context.user_data.get("mode") == "add_task":
+
+        try:
+
+            date, task = text.split(" ", 1)
+
+            if date not in data["tasks"]:
+                data["tasks"][date] = []
+
+            data["tasks"][date].append(task)
+
+            save_data(data)
+
+            context.user_data["mode"] = None
+
+            await update.message.reply_text("✅ Дело добавлено")
+
+            await start(update, context)
+
+        except:
+
+            await update.message.reply_text("Формат:\n2026-03-10 Купить торт")
+
         return
 
-    if isinstance(user_state.get(user_id), tuple):
-        state, date = user_state[user_id]
-        if state == "add_task":
-            tasks.setdefault(date, []).append(text)
-            user_state[user_id] = None
-            await update.message.reply_text("✅ Дело добавлено", reply_markup=main_menu)
-            return
 
-    if text == "📋 Посмотреть дела":
-        user_state[user_id] = "show_date"
-        await update.message.reply_text("Введи дату")
+    if text == "📅 Дела":
+
+        context.user_data["mode"] = "show_tasks"
+
+        await update.message.reply_text(
+            "Введи дату:\n\n2026-03-10"
+        )
+
         return
 
-    if user_state.get(user_id) == "show_date":
-        date = text
-        user_state[user_id] = None
 
-        if date in tasks:
-            result = "\n".join(tasks[date])
-            await update.message.reply_text(f"📅 {date}\n\n{result}", reply_markup=main_menu)
+    if context.user_data.get("mode") == "show_tasks":
+
+        tasks = data["tasks"].get(text)
+
+        if not tasks:
+
+            await update.message.reply_text("Дел нет")
+
         else:
-            await update.message.reply_text("Дел нет", reply_markup=main_menu)
-        return
 
-    if text == "🛒 Продукты":
-        user_state[user_id] = "add_product"
-        await update.message.reply_text("Напиши продукт")
-        return
+            msg = f"📅 {text}\n\n"
 
-    if user_state.get(user_id) == "add_product":
-        products.append(text)
-        user_state[user_id] = None
-        await update.message.reply_text("✅ Добавлено", reply_markup=main_menu)
-        return
+            for t in tasks:
+                msg += f"• {t}\n"
 
-    if text == "💊 Аптечка":
-        user_state[user_id] = "add_med"
-        await update.message.reply_text("Напиши лекарство")
-        return
+            await update.message.reply_text(msg)
 
-    if user_state.get(user_id) == "add_med":
-        meds.append(text)
-        user_state[user_id] = None
-        await update.message.reply_text("✅ Добавлено", reply_markup=main_menu)
-        return
+        context.user_data["mode"] = None
 
-    if text == "🧴 Бытовая химия":
-        user_state[user_id] = "add_chem"
-        await update.message.reply_text("Напиши средство")
-        return
+        await start(update, context)
 
-    if user_state.get(user_id) == "add_chem":
-        chem.append(text)
-        user_state[user_id] = None
-        await update.message.reply_text("✅ Добавлено", reply_markup=main_menu)
-        return
-
-    if text == "⭐ Хотелки":
-        user_state[user_id] = "add_wish"
-        await update.message.reply_text("Что хотите купить?")
-        return
-
-    if user_state.get(user_id) == "add_wish":
-        wishlist.append(text)
-        user_state[user_id] = None
-        await update.message.reply_text("⭐ Добавлено", reply_markup=main_menu)
-        return
-
-    if text == "🌍 Куда поехать":
-        user_state[user_id] = "add_place"
-        await update.message.reply_text("Куда хотите поехать?")
-        return
-
-    if user_state.get(user_id) == "add_place":
-        places.append(text)
-        user_state[user_id] = None
-        await update.message.reply_text("🌍 Добавлено", reply_markup=main_menu)
         return
 
 
-app = ApplicationBuilder().token(TOKEN).build()
+    if text in lists_map:
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        key = lists_map[text]
 
-app.run_polling()
+        context.user_data["current_list"] = key
+
+        items = data[key]
+
+        keyboard = []
+
+        for item, state in items.items():
+
+            icon = "✅" if state else "⬜"
+
+            keyboard.append(
+                [InlineKeyboardButton(f"{icon} {item}", callback_data=item)]
+            )
+
+        keyboard.append(
+            [InlineKeyboardButton("➕ Добавить", callback_data="add")]
+        )
+
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+        return
+
+
+async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    data = load_data()
+
+    key = context.user_data.get("current_list")
+
+    item = query.data
+
+
+    if item == "add":
+
+        context.user_data["mode"] = "add_item"
+
+        await query.message.reply_text("Напиши название")
+
+        return
+
+
+    if key and item in data[key]:
+
+        data[key][item] = not data[key][item]
+
+        save_data(data)
+
+        await query.message.reply_text("✔ Обновлено")
+
+        await start(update, context)
+
+
+async def text_after(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    data = load_data()
+
+    key = context.user_data.get("current_list")
+
+    if context.user_data.get("mode") == "add_item":
+
+        data[key][update.message.text] = False
+
+        save_data(data)
+
+        context.user_data["mode"] = None
+
+        await update.message.reply_text("✅ Добавлено")
+
+        await start(update, context)
+
+
+if __name__ == "__main__":
+
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
+
+    app.add_handler(CallbackQueryHandler(callback))
+
+    app.add_handler(MessageHandler(filters.TEXT, text_after))
+
+    print("бот запущен")
+
+    app.run_polling()
