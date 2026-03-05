@@ -19,7 +19,6 @@ TOKEN = "8577304548:AAGmtneLEePzi99UF7746hndDrWtnQiCCJo"
 
 DATA_FILE = "data.json"
 
-
 MENU = [
     ["📅 Дела"],
     ["➕ Добавить дело"],
@@ -27,7 +26,6 @@ MENU = [
     ["🧴 Бытовая химия", "🏠 Полезности"],
     ["⭐ Хотелки", "✈️ Поездки"]
 ]
-
 
 lists_map = {
     "🛒 Продукты": "products",
@@ -66,6 +64,26 @@ def save_data(data):
         json.dump(data, f, indent=2)
 
 
+def build_list_keyboard(items):
+
+    keyboard = []
+
+    for name, state in items.items():
+
+        icon = "✅" if state else "⬜"
+
+        keyboard.append([
+            InlineKeyboardButton(f"{icon} {name}", callback_data=f"toggle|{name}"),
+            InlineKeyboardButton("❌", callback_data=f"delete|{name}")
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton("➕ Добавить", callback_data="add")
+    ])
+
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = ReplyKeyboardMarkup(MENU, resize_keyboard=True)
@@ -76,10 +94,36 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def show_list(update, context, list_key, title):
+
+    data = load_data()
+
+    items = data[list_key]
+
+    keyboard = build_list_keyboard(items)
+
+    await update.message.reply_text(
+        title,
+        reply_markup=keyboard
+    )
+
+
 async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
     data = load_data()
+
+
+    if text in lists_map:
+
+        key = lists_map[text]
+
+        context.user_data["current_list"] = key
+        context.user_data["list_title"] = text
+
+        await show_list(update, context, key, text)
+
+        return
 
 
     if text == "➕ Добавить дело":
@@ -124,7 +168,7 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "show_tasks"
 
         await update.message.reply_text(
-            "Введи дату:\n\n2026-03-10"
+            "Введите дату\n\n2026-03-10"
         )
 
         return
@@ -154,34 +198,22 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-    if text in lists_map:
+    if context.user_data.get("mode") == "add_item":
 
-        key = lists_map[text]
+        key = context.user_data["current_list"]
 
-        context.user_data["current_list"] = key
+        data[key][text] = False
 
-        items = data[key]
+        save_data(data)
 
-        keyboard = []
+        context.user_data["mode"] = None
 
-        for item, state in items.items():
-
-            icon = "✅" if state else "⬜"
-
-            keyboard.append(
-                [InlineKeyboardButton(f"{icon} {item}", callback_data=item)]
-            )
-
-        keyboard.append(
-            [InlineKeyboardButton("➕ Добавить", callback_data="add")]
+        await show_list(
+            update,
+            context,
+            key,
+            context.user_data["list_title"]
         )
-
-        await update.message.reply_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-        return
 
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -194,46 +226,45 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     key = context.user_data.get("current_list")
 
-    item = query.data
+    action, name = None, None
+
+    if "|" in query.data:
+
+        action, name = query.data.split("|")
+
+    else:
+
+        action = query.data
 
 
-    if item == "add":
+    if action == "add":
 
         context.user_data["mode"] = "add_item"
 
-        await query.message.reply_text("Напиши название")
+        await query.message.reply_text("Введите название")
 
         return
 
 
-    if key and item in data[key]:
+    if action == "toggle":
 
-        data[key][item] = not data[key][item]
-
-        save_data(data)
-
-        await query.message.reply_text("✔ Обновлено")
-
-        await start(update, context)
-
-
-async def text_after(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    data = load_data()
-
-    key = context.user_data.get("current_list")
-
-    if context.user_data.get("mode") == "add_item":
-
-        data[key][update.message.text] = False
+        data[key][name] = not data[key][name]
 
         save_data(data)
 
-        context.user_data["mode"] = None
 
-        await update.message.reply_text("✅ Добавлено")
+    if action == "delete":
 
-        await start(update, context)
+        del data[key][name]
+
+        save_data(data)
+
+
+    items = data[key]
+
+    keyboard = build_list_keyboard(items)
+
+    await query.message.edit_reply_markup(reply_markup=keyboard)
 
 
 if __name__ == "__main__":
@@ -245,8 +276,6 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
 
     app.add_handler(CallbackQueryHandler(callback))
-
-    app.add_handler(MessageHandler(filters.TEXT, text_after))
 
     print("бот запущен")
 
