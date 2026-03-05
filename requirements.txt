@@ -1,2 +1,2 @@
-pyTelegramBotAPI==20.7
+pyTelegramBotAPI==4.31.0
 python-dateutil==2.9.0.post0
