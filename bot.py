@@ -4,13 +4,18 @@ import json
 import os
 from datetime import datetime, timedelta
 
-TOKEN = "8577304548:AAGmtneLEePzi99UF7746hndDrWtnQiCCJo"
+# ─────────────── Инициализация бота ───────────────
+TOKEN = os.getenv("TOKEN")
+if not TOKEN:
+    raise ValueError("Переменная окружения TOKEN не найдена. Укажи её в настройках Railway.")
+
+bot = telebot.TeleBot(TOKEN)
 
 DATA_FILE = "data.json"
 
-# создание базы если нет
+# Создаём файл данных, если его нет
 if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "w") as f:
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "tasks": {},
             "lists": {
@@ -21,60 +26,48 @@ if not os.path.exists(DATA_FILE):
                 "wishlist": [],
                 "trips": []
             }
-        }, f)
+        }, f, ensure_ascii=False, indent=2)
 
 
 def load_data():
-    with open(DATA_FILE, "r") as f:
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-# ------------------- МЕНЮ -------------------
-
+# ─────────────── Главное меню ───────────────
 def main_menu():
-    markup = InlineKeyboardMarkup()
-
+    markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("📅 Дела", callback_data="tasks"),
         InlineKeyboardButton("🛒 Списки", callback_data="lists")
     )
-
     markup.add(
         InlineKeyboardButton("➕ Добавить дело", callback_data="add_task")
     )
-
     return markup
 
 
 @bot.message_handler(commands=["start"])
 def start(msg):
-    bot.send_message(msg.chat.id, "Главное меню", reply_markup=main_menu())
+    bot.send_message(msg.chat.id, "Привет! Вот главное меню:", reply_markup=main_menu())
 
 
-# ------------------- ДЕЛА -------------------
-
+# ─────────────── Дела ───────────────
 @bot.callback_query_handler(func=lambda c: c.data == "tasks")
 def tasks_menu(call):
-
-    markup = InlineKeyboardMarkup()
-
+    markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton("📅 Выбрать дату", callback_data="pick_date")
-    )
-
-    markup.add(
+        InlineKeyboardButton("📅 Выбрать дату", callback_data="pick_date"),
         InlineKeyboardButton("📆 На неделю", callback_data="week_tasks")
     )
-
     markup.add(
         InlineKeyboardButton("📋 Все дела", callback_data="all_tasks")
     )
-
     markup.add(
         InlineKeyboardButton("🔙 Назад", callback_data="back")
     )
@@ -87,80 +80,61 @@ def tasks_menu(call):
     )
 
 
-# ------------------- ДЕЛА НА НЕДЕЛЮ -------------------
-
 @bot.callback_query_handler(func=lambda c: c.data == "week_tasks")
 def week_tasks(call):
-
     data = load_data()
-
     today = datetime.today()
-
     text = "📆 Ближайшие 7 дней\n\n"
 
     for i in range(7):
-
         d = today + timedelta(days=i)
         key = d.strftime("%d.%m.%Y")
-
-        if key in data["tasks"]:
-
-            text += f"{key}\n"
-
+        if key in data["tasks"] and data["tasks"][key]:
+            text += f"<b>{key}</b>\n"
             for t in data["tasks"][key]:
                 text += f"• {t}\n"
-
             text += "\n"
 
-    bot.send_message(call.message.chat.id, text)
+    if text == "📆 Ближайшие 7 дней\n\n":
+        text += "Пока дел на ближайшую неделю нет."
 
+    bot.send_message(call.message.chat.id, text, parse_mode="HTML")
 
-# ------------------- ВСЕ ДЕЛА -------------------
 
 @bot.callback_query_handler(func=lambda c: c.data == "all_tasks")
 def all_tasks(call):
-
     data = load_data()
-
     text = "📋 Все дела\n\n"
 
-    for date in sorted(data["tasks"]):
+    if not data["tasks"]:
+        text += "Список дел пуст."
+    else:
+        for date in sorted(data["tasks"]):
+            if data["tasks"][date]:
+                text += f"<b>{date}</b>\n"
+                for t in data["tasks"][date]:
+                    text += f"• {t}\n"
+                text += "\n"
 
-        for t in data["tasks"][date]:
-
-            text += f"{date} — {t}\n"
-
-    bot.send_message(call.message.chat.id, text)
+    bot.send_message(call.message.chat.id, text, parse_mode="HTML")
 
 
-# ------------------- СПИСКИ -------------------
-
+# ─────────────── Списки ───────────────
 @bot.callback_query_handler(func=lambda c: c.data == "lists")
-def lists(call):
-
-    markup = InlineKeyboardMarkup()
-
+def lists_menu(call):
+    markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("🛒 Продукты", callback_data="products"),
         InlineKeyboardButton("💊 Медикаменты", callback_data="meds")
     )
-
     markup.add(
-        InlineKeyboardButton("🧴 Бытовая химия", callback_data="chem")
-    )
-
-    markup.add(
+        InlineKeyboardButton("🧴 Бытовая химия", callback_data="chem"),
         InlineKeyboardButton("🏠 Полезности", callback_data="useful")
     )
-
     markup.add(
-        InlineKeyboardButton("⭐ Хотелки", callback_data="wishlist")
-    )
-
-    markup.add(
+        InlineKeyboardButton("⭐ Хотелки", callback_data="wishlist"),
         InlineKeyboardButton("✈️ Поездки", callback_data="trips")
     )
-
     markup.add(
         InlineKeyboardButton("🔙 Назад", callback_data="back")
     )
@@ -173,125 +147,98 @@ def lists(call):
     )
 
 
-# ------------------- ПОКАЗ СПИСКА -------------------
-
-def show_list(chat_id, name):
-
+def show_list(chat_id, list_name):
     data = load_data()
+    items = data["lists"].get(list_name, [])
 
-    items = data["lists"][name]
+    if not items:
+        text = "Список пуст."
+    else:
+        text = ""
+        for i, item in enumerate(items, 1):
+            icon = "✅" if item.get("done", False) else "⬜"
+            text += f"{icon} {item['name']}\n"
 
     markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("➕ Добавить", callback_data=f"add_{list_name}"))
+    if items:
+        markup.add(InlineKeyboardButton("✅/⬜ Поменять статус", callback_data=f"toggle_help_{list_name}"))
+        markup.add(InlineKeyboardButton("🗑 Удалить элемент", callback_data=f"del_{list_name}"))
 
-    text = ""
-
-    for i, item in enumerate(items):
-
-        icon = "✅" if item["done"] else "⬜"
-
-        markup.add(
-            InlineKeyboardButton(
-                f"{icon} {item['name']}",
-                callback_data=f"toggle_{name}_{i}"
-            )
-        )
-
-        text += f"{icon} {item['name']}\n"
-
-    markup.add(
-        InlineKeyboardButton("➕ Добавить", callback_data=f"add_{name}")
-    )
-
-    markup.add(
-        InlineKeyboardButton("❌ Удалить", callback_data=f"del_{name}")
-    )
-
-    bot.send_message(chat_id, text or "Пусто", reply_markup=markup)
+    bot.send_message(chat_id, f"<b>{list_name.capitalize()}</b>\n\n{text}", reply_markup=markup, parse_mode="HTML")
 
 
-# ------------------- ОТКРЫТЬ СПИСОК -------------------
-
-@bot.callback_query_handler(func=lambda c: c.data in ["products","meds","chem","useful","wishlist","trips"])
+@bot.callback_query_handler(func=lambda c: c.data in ["products", "meds", "chem", "useful", "wishlist", "trips"])
 def open_list(call):
-
     show_list(call.message.chat.id, call.data)
 
 
-# ------------------- ПЕРЕКЛЮЧЕНИЕ ГАЛОЧКИ -------------------
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("toggle"))
-def toggle(call):
-
-    _, name, i = call.data.split("_")
+@bot.callback_query_handler(func=lambda c: c.data.startswith("toggle_"))
+def toggle_item(call):
+    try:
+        _, list_name, index_str = call.data.split("_", 2)
+        index = int(index_str)
+    except:
+        bot.answer_callback_query(call.id, "Ошибка формата", show_alert=True)
+        return
 
     data = load_data()
+    try:
+        item = data["lists"][list_name][index]
+        item["done"] = not item.get("done", False)
+        save_data(data)
+        show_list(call.message.chat.id, list_name)
+    except (KeyError, IndexError):
+        bot.answer_callback_query(call.id, "Элемент не найден", show_alert=True)
 
-    item = data["lists"][name][int(i)]
-
-    item["done"] = not item["done"]
-
-    save_data(data)
-
-    show_list(call.message.chat.id, name)
-
-
-# ------------------- ДОБАВИТЬ -------------------
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("add_"))
-def add_item(call):
-
-    name = call.data.split("_")[1]
-
-    msg = bot.send_message(call.message.chat.id, "Напиши название")
-
-    bot.register_next_step_handler(msg, save_item, name)
+def add_item_start(call):
+    list_name = call.data.split("_", 1)[1]
+    msg = bot.send_message(call.message.chat.id, f"Напиши, что добавить в «{list_name}»:")
+    bot.register_next_step_handler(msg, lambda m: save_item(m, list_name))
 
 
-def save_item(msg, name):
+def save_item(message, list_name):
+    if not message.text or message.text.strip() == "":
+        bot.send_message(message.chat.id, "Пустое название — не добавляем.")
+        return
 
     data = load_data()
-
-    data["lists"][name].append({
-        "name": msg.text,
-        "done": False
-    })
-
+    data["lists"][list_name].append({"name": message.text.strip(), "done": False})
     save_data(data)
+    show_list(message.chat.id, list_name)
 
-    show_list(msg.chat.id, name)
-
-
-# ------------------- УДАЛИТЬ -------------------
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("del_"))
-def delete_item(call):
-
-    name = call.data.split("_")[1]
-
-    msg = bot.send_message(call.message.chat.id, "Напиши номер элемента")
-
-    bot.register_next_step_handler(msg, remove_item, name)
+def delete_item_start(call):
+    list_name = call.data.split("_", 1)[1]
+    msg = bot.send_message(call.message.chat.id, f"Напиши номер элемента для удаления из «{list_name}» (число):")
+    bot.register_next_step_handler(msg, lambda m: remove_item(m, list_name))
 
 
-def remove_item(msg, name):
+def remove_item(message, list_name):
+    try:
+        idx = int(message.text.strip()) - 1
+        if idx < 0:
+            raise ValueError
+    except:
+        bot.send_message(message.chat.id, "Нужно ввести положительное число.")
+        return
 
     data = load_data()
+    items = data["lists"][list_name]
+    if 0 <= idx < len(items):
+        removed = items.pop(idx)
+        save_data(data)
+        bot.send_message(message.chat.id, f"Удалено: {removed['name']}")
+        show_list(message.chat.id, list_name)
+    else:
+        bot.send_message(message.chat.id, "Такого номера нет.")
 
-    i = int(msg.text) - 1
-
-    if i < len(data["lists"][name]):
-        data["lists"][name].pop(i)
-
-    save_data(data)
-
-    show_list(msg.chat.id, name)
-
-
-# ------------------- НАЗАД -------------------
 
 @bot.callback_query_handler(func=lambda c: c.data == "back")
-def back(call):
-
+def back_to_main(call):
     bot.edit_message_text(
         "Главное меню",
         call.message.chat.id,
@@ -300,4 +247,7 @@ def back(call):
     )
 
 
-bot.infinity_polling()
+# Запуск бота
+if __name__ == "__main__":
+    print("Бот запущен...")
+    bot.infinity_polling(timeout=15, long_polling_timeout=10)
