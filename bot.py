@@ -4,21 +4,13 @@ import datetime
 import calendar
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    filters,
-    ContextTypes
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 ALLOWED_USERS = [482418773,443835005]
 TOKEN = os.getenv("BOT_TOKEN")
+DATA_FILE="data.json"
 
-DATA_FILE = "data.json"
-
-CATEGORIES = {
+CATEGORIES={
 "products":"🛒 Продукты",
 "meds":"💊 Медикаменты",
 "chem":"🧴 Бытовая химия",
@@ -32,16 +24,16 @@ def load():
     with open(DATA_FILE) as f:
         return json.load(f)
 
-
 def save(data):
     with open(DATA_FILE,"w") as f:
         json.dump(data,f,indent=2)
 
 
-data = load()
+data=load()
 
 
 def menu():
+
     return InlineKeyboardMarkup([
 
     [InlineKeyboardButton("📅 Дела",callback_data="tasks")],
@@ -51,13 +43,23 @@ def menu():
     [InlineKeyboardButton("🛒 Продукты",callback_data="products"),
      InlineKeyboardButton("💊 Медикаменты",callback_data="meds")],
 
-    [InlineKeyboardButton("🧴 Бытовая химия",callback_data="chem"),
+    [InlineKeyboardButton("🧴 Химия",callback_data="chem"),
      InlineKeyboardButton("🏠 Полезности",callback_data="useful")],
 
     [InlineKeyboardButton("⭐ Хотелки",callback_data="wishes"),
      InlineKeyboardButton("✈️ Поездки",callback_data="trips")]
 
     ])
+
+
+def show_list(cat):
+
+    items=data[cat]
+
+    if not items:
+        return "Список пуст"
+
+    return "\n".join([f"{i+1}. {v}" for i,v in enumerate(items)])
 
 
 async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
@@ -72,16 +74,6 @@ async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
     "🏠 Домашний планер",
     reply_markup=menu()
     )
-
-
-def show_list(cat):
-
-    items=data[cat]
-
-    if not items:
-        return "Список пуст"
-
-    return "\n".join([f"{i+1}. {v}" for i,v in enumerate(items)])
 
 
 async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
@@ -157,6 +149,8 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text(txt)
 
 
+# ВЫБОР ДАТЫ
+
     elif cmd=="add_task":
 
         year=datetime.date.today().year
@@ -191,9 +185,9 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
     elif cmd.startswith("month_"):
 
         month=int(cmd.split("_")[1])
-        year=context.user_data["year"]
-
         context.user_data["month"]=month
+
+        year=context.user_data["year"]
 
         days=calendar.monthrange(year,month)[1]
 
@@ -228,8 +222,10 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"]="task"
         context.user_data["date"]=date
 
-        await q.message.reply_text("Введите дело")
+        await q.message.reply_text(f"Введите задачу на {date}")
 
+
+# ДОБАВЛЕНИЕ В СПИСКИ
 
     elif cmd.startswith("add_"):
 
@@ -240,6 +236,8 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("Введите текст")
 
 
+# УДАЛЕНИЕ
+
     elif cmd.startswith("del_"):
 
         cat=cmd.replace("del_","")
@@ -247,7 +245,6 @@ async def buttons(update:Update,context:ContextTypes.DEFAULT_TYPE):
         items=data[cat]
 
         if not items:
-
             await q.message.reply_text("Список пуст")
             return
 
@@ -284,7 +281,6 @@ async def text(update:Update,context:ContextTypes.DEFAULT_TYPE):
         return
 
     mode=context.user_data["mode"]
-
     msgs=update.message.text.split("\n")
 
 
