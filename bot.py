@@ -18,6 +18,7 @@ from telegram.ext import (
     filters,
 )
 
+ALLOWED_USERS = [482418773,443835005]
 TOKEN = os.getenv("BOT_TOKEN")
 DB_FILE = "data.db"
 DATE_FMT = "%d.%m.%Y"
