@@ -59,8 +59,6 @@ MAIN_MENU = ReplyKeyboardMarkup(
 )
 
 
-# ---------- DB ----------
-
 def get_conn():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -309,8 +307,14 @@ def build_date_tasks_keyboard(date_text: str, tasks) -> InlineKeyboardMarkup:
     for idx, task in enumerate(tasks, 1):
         short_text = task["text"][:24] + ("…" if len(task["text"]) > 24 else "")
         rows.append([
-            InlineKeyboardButton(f"{idx}. {short_text}", callback_data="noop"),
-            InlineKeyboardButton("❌", callback_data=f"delete_task|{task['id']}"),
+            InlineKeyboardButton(
+                f"{idx}. {short_text}",
+                callback_data="noop",
+            ),
+            InlineKeyboardButton(
+                "❌",
+                callback_data=f"delete_task|{task['id']}",
+            ),
         ])
 
     rows.append([InlineKeyboardButton("➕ Добавить дело на эту дату", callback_data=f"add_task_for|{date_text}")])
