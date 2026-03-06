@@ -221,6 +221,25 @@ def main():
 
     print("Bot started")
 
+    def main():
+
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+
+    app.add_handler(CallbackQueryHandler(menu, pattern="^(add|list)$"))
+    app.add_handler(CallbackQueryHandler(choose_year, pattern="^year_"))
+    app.add_handler(CallbackQueryHandler(choose_month, pattern="^month_"))
+    app.add_handler(CallbackQueryHandler(choose_day, pattern="^day_"))
+    app.add_handler(CallbackQueryHandler(delete_task, pattern="^del_"))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text))
+
+    print("Bot started")
+
+    # СБРОС ВЕБХУКА
+    app.bot.delete_webhook(drop_pending_updates=True)
+
     app.run_polling()
 
 
