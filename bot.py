@@ -18,10 +18,12 @@ from telegram.ext import (
     filters,
 )
 
-ALLOWED_USERS = [482418773,443835005]
 TOKEN = os.getenv("BOT_TOKEN")
+ALLOWED_USERS = [482418773, 443835005]
+
 DB_FILE = "data.db"
 DATE_FMT = "%d.%m.%Y"
+TIME_FMT = "%H:%M"
 
 LISTS = {
     "products": "🛒 Продукты",
@@ -76,7 +78,10 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         date_text TEXT NOT NULL,
         date_iso TEXT NOT NULL,
+        time_text TEXT NOT NULL DEFAULT '09:00',
+        datetime_iso TEXT NOT NULL,
         text TEXT NOT NULL,
+        created_by INTEGER,
         created_at TEXT NOT NULL
     )
     """)
@@ -84,6 +89,11 @@ def init_db():
     cur.execute("""
     CREATE INDEX IF NOT EXISTS idx_tasks_date_iso
     ON tasks (date_iso)
+    """)
+
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_tasks_datetime_iso
+    ON tasks (datetime_iso)
     """)
 
     cur.execute("""
@@ -101,6 +111,22 @@ def init_db():
     ON list_items (list_key, name)
     """)
 
+    cur.execute("PRAGMA table_info(tasks)")
+    columns = [row["name"] for row in cur.fetchall()]
+
+    if "time_text" not in columns:
+        cur.execute("ALTER TABLE tasks ADD COLUMN time_text TEXT NOT NULL DEFAULT '09:00'")
+    if "datetime_iso" not in columns:
+        cur.execute("ALTER TABLE tasks ADD COLUMN datetime_iso TEXT NOT NULL DEFAULT ''")
+    if "created_by" not in columns:
+        cur.execute("ALTER TABLE tasks ADD COLUMN created_by INTEGER")
+
+    cur.execute("""
+        UPDATE tasks
+        SET datetime_iso = date_iso || 'T' || COALESCE(time_text, '09:00') || ':00'
+        WHERE datetime_iso = ''
+    """)
+
     conn.commit()
 
 
@@ -116,44 +142,73 @@ def date_to_iso(date_str: str) -> str:
     return parse_date(date_str).strftime("%Y-%m-%d")
 
 
+def make_datetime_iso(date_text: str, time_text: str) -> str:
+    dt = datetime.strptime(f"{date_text} {time_text}", f"{DATE_FMT} {TIME_FMT}")
+    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def split_multiline_items(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+def is_allowed(chat_id: int) -> bool:
+    return chat_id in ALLOWED_USERS
+
+
+def get_user_name(chat_id: int) -> str:
+    if chat_id == ALLOWED_USERS[0]:
+        return "Первый участник"
+    if len(ALLOWED_USERS) > 1 and chat_id == ALLOWED_USERS[1]:
+        return "Второй участник"
+    return "Кто-то"
+
+
 # ---------- TASKS ----------
 
-def add_task(date_text: str, text: str):
+def add_task(date_text: str, time_text: str, text: str, created_by: int | None = None):
     text = text.strip()
     if not text:
-        return
+        return None
 
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO tasks (date_text, date_iso, text, created_at)
-        VALUES (?, ?, ?, ?)
-    """, (date_text, date_to_iso(date_text), text, now_str()))
+        INSERT INTO tasks (date_text, date_iso, time_text, datetime_iso, text, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        date_text,
+        date_to_iso(date_text),
+        time_text,
+        make_datetime_iso(date_text, time_text),
+        text,
+        created_by,
+        now_str(),
+    ))
     conn.commit()
-
-
-def get_tasks_for_date(date_text: str):
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, date_text, date_iso, text
-        FROM tasks
-        WHERE date_text = ?
-        ORDER BY id
-    """, (date_text,))
-    return cur.fetchall()
+    return cur.lastrowid
 
 
 def get_task(task_id: int):
     cur = conn.cursor()
     cur.execute("""
-        SELECT id, date_text, date_iso, text
+        SELECT id, date_text, date_iso, time_text, datetime_iso, text, created_by
         FROM tasks
         WHERE id = ?
     """, (task_id,))
     return cur.fetchone()
+
+
+def update_task_text(task_id: int, new_text: str):
+    new_text = new_text.strip()
+    if not new_text:
+        return
+
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE tasks
+        SET text = ?
+        WHERE id = ?
+    """, (new_text, task_id))
+    conn.commit()
 
 
 def delete_task(task_id: int):
@@ -162,16 +217,27 @@ def delete_task(task_id: int):
     conn.commit()
 
 
+def get_tasks_for_date(date_text: str):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, date_text, date_iso, time_text, datetime_iso, text, created_by
+        FROM tasks
+        WHERE date_text = ?
+        ORDER BY time_text, id
+    """, (date_text,))
+    return cur.fetchall()
+
+
 def get_tasks_for_week():
     today = datetime.now().date()
     end_date = today + timedelta(days=6)
 
     cur = conn.cursor()
     cur.execute("""
-        SELECT id, date_text, date_iso, text
+        SELECT id, date_text, date_iso, time_text, datetime_iso, text, created_by
         FROM tasks
         WHERE date_iso BETWEEN ? AND ?
-        ORDER BY date_iso, id
+        ORDER BY date_iso, time_text, id
     """, (
         today.strftime("%Y-%m-%d"),
         end_date.strftime("%Y-%m-%d"),
@@ -179,13 +245,27 @@ def get_tasks_for_week():
     return cur.fetchall()
 
 
-def get_all_tasks():
+def get_all_tasks_future():
     cur = conn.cursor()
+    now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     cur.execute("""
-        SELECT id, date_text, date_iso, text
+        SELECT id, date_text, date_iso, time_text, datetime_iso, text, created_by
         FROM tasks
-        ORDER BY date_iso, id
-    """)
+        WHERE datetime_iso >= ?
+        ORDER BY date_iso, time_text, id
+    """, (now_iso,))
+    return cur.fetchall()
+
+
+def get_future_tasks():
+    cur = conn.cursor()
+    now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    cur.execute("""
+        SELECT id, date_text, time_text, datetime_iso, text, created_by
+        FROM tasks
+        WHERE datetime_iso > ?
+        ORDER BY datetime_iso
+    """, (now_iso,))
     return cur.fetchall()
 
 
@@ -239,6 +319,61 @@ def delete_list_item(item_id: int):
     cur = conn.cursor()
     cur.execute("DELETE FROM list_items WHERE id = ?", (item_id,))
     conn.commit()
+
+
+# ---------- REMINDERS ----------
+
+async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    job_data = context.job.data
+    task_id = job_data["task_id"]
+
+    task = get_task(task_id)
+    if not task:
+        return
+
+    date_text = task["date_text"]
+    time_text = task["time_text"]
+    task_text = task["text"]
+
+    for chat_id in ALLOWED_USERS:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⏰ Напоминание\n{date_text} {time_text}\n• {task_text}"
+            )
+        except Exception:
+            pass
+
+
+def schedule_task_reminder(app, task_id: int, datetime_iso: str):
+    dt = datetime.strptime(datetime_iso, "%Y-%m-%dT%H:%M:%S")
+    if dt <= datetime.now():
+        return
+
+    job_name = f"task_{task_id}"
+
+    old_jobs = app.job_queue.get_jobs_by_name(job_name)
+    for job in old_jobs:
+        job.schedule_removal()
+
+    app.job_queue.run_once(
+        reminder_job,
+        when=dt,
+        data={"task_id": task_id},
+        name=job_name,
+    )
+
+
+def remove_task_reminder(app, task_id: int):
+    job_name = f"task_{task_id}"
+    old_jobs = app.job_queue.get_jobs_by_name(job_name)
+    for job in old_jobs:
+        job.schedule_removal()
+
+
+def reschedule_all_tasks(app):
+    for task in get_future_tasks():
+        schedule_task_reminder(app, task["id"], task["datetime_iso"])
 
 
 # ---------- RENDER ----------
@@ -297,7 +432,7 @@ def render_tasks_for_date(date_text: str, tasks) -> str:
 
     lines = [f"📅 {date_text}", ""]
     for idx, task in enumerate(tasks, 1):
-        lines.append(f"{idx}. {task['text']}")
+        lines.append(f"{idx}. [{task['time_text']}] {task['text']}")
     return "\n".join(lines)
 
 
@@ -305,15 +440,20 @@ def build_date_tasks_keyboard(date_text: str, tasks) -> InlineKeyboardMarkup:
     rows = []
 
     for idx, task in enumerate(tasks, 1):
-        short_text = task["text"][:24] + ("…" if len(task["text"]) > 24 else "")
+        short_text = f"{task['time_text']} {task['text']}"
+        short_text = short_text[:20] + ("…" if len(short_text) > 20 else "")
         rows.append([
             InlineKeyboardButton(
                 f"{idx}. {short_text}",
                 callback_data="noop",
             ),
             InlineKeyboardButton(
+                "✏️",
+                callback_data=f"edit_task|date|{task['id']}",
+            ),
+            InlineKeyboardButton(
                 "❌",
-                callback_data=f"delete_task|{task['id']}",
+                callback_data=f"delete_task|date|{task['id']}",
             ),
         ])
 
@@ -335,8 +475,21 @@ def render_week_tasks(tasks) -> str:
                 lines.append("")
             current_date = task["date_text"]
             lines.append(current_date)
-        lines.append(f"• {task['text']}")
+        lines.append(f"• [{task['time_text']}] {task['text']}")
     return "\n".join(lines)
+
+
+def build_week_tasks_keyboard(tasks) -> InlineKeyboardMarkup:
+    rows = []
+    for task in tasks:
+        short_text = f"{task['date_text']} {task['time_text']}"
+        rows.append([
+            InlineKeyboardButton(short_text, callback_data="noop"),
+            InlineKeyboardButton("✏️", callback_data=f"edit_task|week|{task['id']}"),
+            InlineKeyboardButton("❌", callback_data=f"delete_task|week|{task['id']}"),
+        ])
+    rows.append([InlineKeyboardButton("⬅️ К делам", callback_data="open_tasks_menu")])
+    return InlineKeyboardMarkup(rows)
 
 
 def render_all_tasks(tasks) -> str:
@@ -345,8 +498,21 @@ def render_all_tasks(tasks) -> str:
 
     lines = ["📋 Все дела", ""]
     for task in tasks:
-        lines.append(f"{task['date_text']} — {task['text']}")
+        lines.append(f"{task['date_text']} [{task['time_text']}] — {task['text']}")
     return "\n".join(lines)
+
+
+def build_all_tasks_keyboard(tasks) -> InlineKeyboardMarkup:
+    rows = []
+    for task in tasks:
+        short_text = f"{task['date_text']} {task['time_text']}"
+        rows.append([
+            InlineKeyboardButton(short_text, callback_data="noop"),
+            InlineKeyboardButton("✏️", callback_data=f"edit_task|all|{task['id']}"),
+            InlineKeyboardButton("❌", callback_data=f"delete_task|all|{task['id']}"),
+        ])
+    rows.append([InlineKeyboardButton("⬅️ К делам", callback_data="open_tasks_menu")])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_year_picker(mode: str, start_year: int | None = None) -> InlineKeyboardMarkup:
@@ -417,7 +583,36 @@ def build_day_picker(mode: str, year: int, month: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def build_time_picker(date_text: str) -> InlineKeyboardMarkup:
+    times = [
+        ["09:00", "12:00", "15:00"],
+        ["18:00", "20:00", "22:00"],
+    ]
+    rows = []
+    for row_times in times:
+        row = []
+        for t in row_times:
+            row.append(InlineKeyboardButton(t, callback_data=f"pick_time|{date_text}|{t}"))
+        rows.append(row)
+
+    rows.append([InlineKeyboardButton("⬅️ К дате", callback_data="tasks_pick_date")])
+    return InlineKeyboardMarkup(rows)
+
+
 # ---------- HELPERS ----------
+
+async def notify_other_user(
+    context: ContextTypes.DEFAULT_TYPE,
+    actor_chat_id: int,
+    text: str
+):
+    for chat_id in ALLOWED_USERS:
+        if chat_id != actor_chat_id:
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=text)
+            except Exception:
+                pass
+
 
 async def safe_delete_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int | None):
     if not message_id:
@@ -449,6 +644,10 @@ async def edit_or_send_message(query, text: str, reply_markup=None):
 # ---------- HANDLERS ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update.effective_chat.id):
+        await update.message.reply_text("⛔ Нет доступа")
+        return
+
     context.user_data.clear()
     await show_main_menu(update)
 
@@ -456,6 +655,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def open_tasks_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    if not is_allowed(query.message.chat_id):
+        return
+
     context.user_data.clear()
     await edit_or_send_message(query, "📅 Раздел дел", build_tasks_menu())
 
@@ -463,6 +666,10 @@ async def open_tasks_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def open_lists_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    if not is_allowed(query.message.chat_id):
+        return
+
     context.user_data.clear()
     await edit_or_send_message(query, "🛒 Раздел списков", build_lists_menu())
 
@@ -521,6 +728,13 @@ async def open_day_picker(update: Update, mode: str, year: int, month: int):
     await edit_or_send_message(query, "Выберите день", build_day_picker(mode, year, month))
 
 
+async def open_time_picker(update: Update, date_text: str, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["task_date"] = date_text
+    await edit_or_send_message(query, f"Выберите время для {date_text}", build_time_picker(date_text))
+
+
 async def show_tasks_for_date(update: Update, date_text: str, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     tasks = get_tasks_for_date(date_text)
@@ -549,39 +763,22 @@ async def refresh_tasks_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int
 async def add_task_for_date_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, date_text: str):
     query = update.callback_query
     await query.answer()
-    context.user_data["mode"] = "await_task_text"
     context.user_data["task_date"] = date_text
-    context.user_data["active_task_message_id"] = query.message.message_id
-    context.user_data["active_task_date"] = date_text
-
-    prompt = await query.message.reply_text(
-        f"✍️ Дата выбрана: {date_text}\n\n"
-        f"Отправь текст дела.\n"
-        f"Можно несколько дел, каждое с новой строки."
-    )
-    context.user_data["temp_prompt_message_id"] = prompt.message_id
+    await edit_or_send_message(query, f"Выберите время для {date_text}", build_time_picker(date_text))
 
 
 async def show_week_tasks(update: Update):
     query = update.callback_query
     await query.answer()
     tasks = get_tasks_for_week()
-    await edit_or_send_message(
-        query,
-        render_week_tasks(tasks),
-        InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К делам", callback_data="open_tasks_menu")]]),
-    )
+    await edit_or_send_message(query, render_week_tasks(tasks), build_week_tasks_keyboard(tasks))
 
 
 async def show_all_tasks(update: Update):
     query = update.callback_query
     await query.answer()
-    tasks = get_all_tasks()
-    await edit_or_send_message(
-        query,
-        render_all_tasks(tasks),
-        InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К делам", callback_data="open_tasks_menu")]]),
-    )
+    tasks = get_all_tasks_future()
+    await edit_or_send_message(query, render_all_tasks(tasks), build_all_tasks_keyboard(tasks))
 
 
 async def toggle_item_callback(update: Update, item_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -627,13 +824,12 @@ async def add_item_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     context.user_data["active_list_key"] = list_key
 
     prompt = await query.message.reply_text(
-        f"✍️ Отправь новые элементы для списка:\n{LISTS[list_key]}\n\n"
-        f"Можно несколько строками, например:\nмолоко\nяйца"
+        f"✍️ Отправь новые элементы для списка:\n{LISTS[list_key]}\n\nМожно несколько строками."
     )
     context.user_data["temp_prompt_message_id"] = prompt.message_id
 
 
-async def delete_task_callback(update: Update, task_id: int, context: ContextTypes.DEFAULT_TYPE):
+async def delete_task_callback(update: Update, task_id: int, source: str, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -642,17 +838,67 @@ async def delete_task_callback(update: Update, task_id: int, context: ContextTyp
         return
 
     date_text = task["date_text"]
-    delete_task(task_id)
-    tasks = get_tasks_for_date(date_text)
-    context.user_data["active_task_message_id"] = query.message.message_id
-    context.user_data["active_task_date"] = date_text
+    time_text = task["time_text"]
+    task_text = task["text"]
 
-    await edit_or_send_message(query, render_tasks_for_date(date_text, tasks), build_date_tasks_keyboard(date_text, tasks))
+    delete_task(task_id)
+    remove_task_reminder(context.application, task_id)
+
+    actor_chat_id = query.message.chat_id
+    actor_name = get_user_name(actor_chat_id)
+    await notify_other_user(
+        context,
+        actor_chat_id,
+        f"🗑 {actor_name} удалил дело:\n{date_text} {time_text}\n• {task_text}"
+    )
+
+    if source == "date":
+        tasks = get_tasks_for_date(date_text)
+        context.user_data["active_task_message_id"] = query.message.message_id
+        context.user_data["active_task_date"] = date_text
+        await edit_or_send_message(query, render_tasks_for_date(date_text, tasks), build_date_tasks_keyboard(date_text, tasks))
+        return
+
+    if source == "week":
+        tasks = get_tasks_for_week()
+        await edit_or_send_message(query, render_week_tasks(tasks), build_week_tasks_keyboard(tasks))
+        return
+
+    if source == "all":
+        tasks = get_all_tasks_future()
+        await edit_or_send_message(query, render_all_tasks(tasks), build_all_tasks_keyboard(tasks))
+        return
+
+
+async def edit_task_callback(update: Update, task_id: int, source: str, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    task = get_task(task_id)
+    if not task:
+        return
+
+    context.user_data["mode"] = "await_task_edit"
+    context.user_data["edit_task_id"] = task_id
+    context.user_data["edit_task_source"] = source
+
+    prompt = await query.message.reply_text(
+        f"✏️ Редактирование дела\n\n"
+        f"Дата: {task['date_text']}\n"
+        f"Время: {task['time_text']}\n"
+        f"Старый текст: {task['text']}\n\n"
+        f"Отправь новый текст."
+    )
+    context.user_data["temp_prompt_message_id"] = prompt.message_id
 
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
+
+    if not is_allowed(query.message.chat_id):
+        await query.answer("⛔ Нет доступа", show_alert=True)
+        return
 
     if data == "noop":
         await query.answer()
@@ -718,18 +964,25 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if mode == "add":
-            context.user_data["mode"] = "await_task_text"
-            context.user_data["task_date"] = date_text
-            context.user_data["active_task_message_id"] = query.message.message_id
-            context.user_data["active_task_date"] = date_text
-
-            prompt = await query.message.reply_text(
-                f"✍️ Дата выбрана: {date_text}\n\n"
-                f"Отправь текст дела.\n"
-                f"Можно несколько дел, каждое с новой строки."
-            )
-            context.user_data["temp_prompt_message_id"] = prompt.message_id
+            await open_time_picker(update, date_text, context)
             return
+
+    if data.startswith("pick_time|"):
+        _, date_text, time_text = data.split("|", 2)
+        await query.answer()
+        context.user_data["mode"] = "await_task_text"
+        context.user_data["task_date"] = date_text
+        context.user_data["task_time"] = time_text
+        context.user_data["active_task_message_id"] = query.message.message_id
+        context.user_data["active_task_date"] = date_text
+
+        prompt = await query.message.reply_text(
+            f"✍️ Дата: {date_text}\n⏰ Время: {time_text}\n\n"
+            f"Отправь текст дела.\n"
+            f"Можно несколько дел, каждое с новой строки."
+        )
+        context.user_data["temp_prompt_message_id"] = prompt.message_id
+        return
 
     if data.startswith("add_task_for|"):
         _, date_text = data.split("|", 1)
@@ -757,8 +1010,13 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("delete_task|"):
-        _, task_id = data.split("|", 1)
-        await delete_task_callback(update, int(task_id), context)
+        _, source, task_id = data.split("|", 2)
+        await delete_task_callback(update, int(task_id), source, context)
+        return
+
+    if data.startswith("edit_task|"):
+        _, source, task_id = data.split("|", 2)
+        await edit_task_callback(update, int(task_id), source, context)
         return
 
     await query.answer("Неизвестная команда")
@@ -768,6 +1026,10 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
     user_message_id = update.message.message_id
+
+    if not is_allowed(chat_id):
+        await update.message.reply_text("⛔ Нет доступа")
+        return
 
     if text == "📅 Дела":
         context.user_data.clear()
@@ -806,12 +1068,77 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if mode == "await_task_text":
         date_text = context.user_data["task_date"]
+        time_text = context.user_data["task_time"]
         tasks_to_add = split_multiline_items(text)
 
+        created_ids = []
         for task_text in tasks_to_add:
-            add_task(date_text, task_text)
+            new_id = add_task(date_text, time_text, task_text, chat_id)
+            if new_id:
+                created_ids.append(new_id)
+
+        for task_id in created_ids:
+            task = get_task(task_id)
+            if task:
+                schedule_task_reminder(context.application, task_id, task["datetime_iso"])
 
         await refresh_tasks_message(context, chat_id, date_text)
+
+        if tasks_to_add:
+            actor_name = get_user_name(chat_id)
+            added_text = "\n".join([f"• {item}" for item in tasks_to_add])
+            await notify_other_user(
+                context,
+                chat_id,
+                f"📌 {actor_name} добавил дела на {date_text} {time_text}:\n\n{added_text}"
+            )
+
+        prompt_id = context.user_data.get("temp_prompt_message_id")
+        context.user_data["mode"] = None
+        context.user_data.pop("temp_prompt_message_id", None)
+
+        await safe_delete_message(context, chat_id, prompt_id)
+        await safe_delete_message(context, chat_id, user_message_id)
+        return
+
+    if mode == "await_task_edit":
+        task_id = context.user_data["edit_task_id"]
+        source = context.user_data["edit_task_source"]
+
+        task = get_task(task_id)
+        if task:
+            old_text = task["text"]
+            update_task_text(task_id, text)
+
+            updated_task = get_task(task_id)
+            actor_name = get_user_name(chat_id)
+            await notify_other_user(
+                context,
+                chat_id,
+                f"✏️ {actor_name} изменил дело\n"
+                f"{updated_task['date_text']} {updated_task['time_text']}\n\n"
+                f"Было:\n• {old_text}\n\n"
+                f"Стало:\n• {updated_task['text']}"
+            )
+
+            if source == "date":
+                await refresh_tasks_message(context, chat_id, updated_task["date_text"])
+            elif source == "week":
+                tasks = get_tasks_for_week()
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=context.user_data.get("active_task_message_id", update.message.message_id),
+                    text=render_week_tasks(tasks),
+                    reply_markup=build_week_tasks_keyboard(tasks),
+                )
+            elif source == "all":
+                tasks = get_all_tasks_future()
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=context.user_data.get("active_task_message_id", update.message.message_id),
+                    text=render_all_tasks(tasks),
+                    reply_markup=build_all_tasks_keyboard(tasks),
+                )
 
         prompt_id = context.user_data.get("temp_prompt_message_id")
         context.user_data["mode"] = None
@@ -831,6 +1158,7 @@ def main():
     init_db()
 
     app = ApplicationBuilder().token(TOKEN).build()
+    reschedule_all_tasks(app)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_router))
